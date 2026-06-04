@@ -1,0 +1,137 @@
+// dllmain.cpp : Define el punto de entrada de la aplicación DLL.
+#include <Windows.h>
+#include "pch.h"
+#include <stdio.h>
+#include <time.h>
+#include <winternl.h>
+
+/*
+* Agredo esta linea para no tener problemas con las librerias de Detours para las de
+* x86 y x64
+*/
+
+#ifdef _WIN64
+#pragma comment(lib, "Detx64/detours.lib")
+#include "Detx64/detours.h"
+#define DLL_PATH "C:\\test\\HackAndBeer.dll"
+#define CALL_API WINAPI 
+#else
+#pragma comment(lib, "Detx86/detours.lib")
+#include "Detx86/detours.h"
+#define DLL_PATH "C:\\test\\WOW\\HackAndBeer.dll"
+#define CALL_API __cdecl
+#endif
+
+/*
+* La primera idea con este DLL es detectar cuando un proceso cargue alguna DLL correspondiente
+* En este caso en conjunto con un driver detectaremos cuando se realice la carga de DLL.
+*/
+
+#pragma comment(lib, "Advapi32.lib")
+
+
+/* Donde vamos a poner los logs */
+const char* LogFilePath = "C:\\test\\log.txt";
+
+/* Prototipos de funciones */
+typedef int (CALL_API* suma_t)(int, int);
+
+// Configuramos nuestra funcion como Nula
+suma_t pSum = NULL;
+
+// ========================================================================
+
+// Funcion para escribir Logs
+void WriteLogFile(char* Data);
+
+// ========================================================================
+
+// Added for the Sum
+int CALL_API hookSuma(int a, int b)
+{
+    char EventData[512];
+
+    int temp = a + b + 100;
+
+    sprintf_s(EventData, "[!] Se realizo una suma: %d + %d, se le agregan el total sera de %d\n", a, b, temp);
+
+    WriteLogFile(EventData);
+
+    return pSum(a, b) + 100;
+}
+
+/* Funcion para escribir logs en un archivo */
+void WriteLogFile(char* Data)
+{
+
+    FILE* f = NULL;
+    fopen_s(&f, LogFilePath, "a");
+    if (f) {
+        fprintf(f, "%s", Data);
+        fclose(f);
+    }
+}
+
+/* Funcion para configurar detours */
+void ConfigureDetours() {
+    DWORD error = NO_ERROR; // Function for errors
+    char EventData[512];
+
+    // --- start initializing the detours ------
+
+    error = DetourTransactionBegin();
+    if (error != NO_ERROR) {
+        sprintf_s(EventData, "[!] Fallo el inicio de Detour transaction; ERROR %d\n", error);
+        WriteLogFile(EventData);
+        return;
+    }
+
+    error = DetourUpdateThread(GetCurrentThread());
+    if (error != NO_ERROR)
+    {
+        sprintf_s(EventData, "[!] Fallo la obtencion de Hilo; ERROR %d\n", error);
+        WriteLogFile(EventData);
+        return;
+    }
+
+    // Hook a funcion suma
+
+    pSum = (suma_t)DetourFindFunction(DLL_PATH, "suma");
+
+    error = DetourAttach((PVOID*)&pSum, hookSuma);
+
+    if (error != NO_ERROR) {
+        sprintf_s(EventData, "[!] Fallo en DetourAttach; ERROR %d\n", error);
+        WriteLogFile(EventData);
+        return;
+    }
+
+    error = DetourTransactionCommit();
+
+    if (error != NO_ERROR) {
+        sprintf_s(EventData, "[!] Fallo en la finalizacion de accion de Detour; ERROR %d\n", error);
+        WriteLogFile(EventData);
+        return;
+    }
+
+    sprintf_s(EventData, "[+] Detour Adjuntado; Finalizado correctamente\n");
+    WriteLogFile(EventData);
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule,
+    DWORD  ul_reason_for_call,
+    LPVOID lpReserved
+)
+{
+    switch (ul_reason_for_call)
+    {
+    case DLL_PROCESS_ATTACH:
+        ConfigureDetours();
+        break;
+    case DLL_THREAD_ATTACH:
+    case DLL_THREAD_DETACH:
+    case DLL_PROCESS_DETACH:
+        break;
+    }
+    return TRUE;
+}
